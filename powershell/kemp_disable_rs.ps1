@@ -1,6 +1,6 @@
 <#
 .DESCRIPTION
-  This is a script to report to check the health of hypervisors (vmware and rhv).
+  This is a script to disable and then re-enable a Real Server for maintenance on Kemp Load Balancer.
 .PARAMETER vlb
   The connection hostname or IP address of the Kemp Load Balancer to connect to e.g. "qld-ndb2=vlb01"
 .PARAMETER vlbport
@@ -10,16 +10,15 @@
 .INPUTS
   Requires Windows Vault entry for "kemp-query"
 .OUTPUTS
-  Log file stored in "C:\temp\hypervisor_daily_checks$(Get-Date –f yyyy-MM-dd-HHmm).log"
-  Email will be sent to list of addresses in $msgto array.
+  Log file stored in "C:\temp\kemp_disable_rs_$(Get-Date -f yyyy-MM-dd-HHmm).log"
 .NOTES
   Version:        1.0
   Author:         Joshua Perry
   Creation Date:  16/11/2022
-  Purpose/Change: This is an evolution of a previous script (vmware_daily_checks.ps1) to include multiple hypervisors.
+  Purpose/Change: Formal creation of script (from bunch of commands in my notepad++)
   
 .EXAMPLE
-  <Example goes here. Repeat this attribute for more than one example>
+  
 #>
 
 #----------------------------------------------------------[Logging Start]---------------------------------------------------------
@@ -44,42 +43,18 @@
 
     # Initialise Arrays
 
-        $rhvauth = @()
-
-    # Create HTML Header
-
-        $Header = @("
-        <style>
-        TABLE {border-width: 1px; border-style: solid; border-color: black; border-collapse: collapse;}
-        TH {border-width: 1px; padding: 3px; border-style: solid; border-color: black; background-color: #21c465;}
-        TD {border-width: 1px; padding: 3px; border-style: solid; border-color: black;}
-        .header {
-            padding: 60px;
-            text-align: center;
-            background: #FFFFFF;
-            color: black;
-            font-size: 45px;
-            line-height: 45px;
-        }
-        </style>
-        <div class='header'>
-            <h1>Hypervisor Health Check Report</h1>
-        </div>
-        ")
+        #N/A
 
 #----------------------------------------------------------[Declarations]----------------------------------------------------------
 
     # General
     
-        # N/A
+        # The lines below can be uncommented, if you would like to define your variables manually, otherwise they will be pulled
+        # from the configuration file defined as $settings.
 
-    # SMTP Settings
-    
-        #$msgsubj = $settings.msgsubj
-        #$msgfrom = $settings.msgfrom
-        #$msgto = $settings.msgto | convertfrom-json
-        #$smtpServer = $settings.smtpsrv
-        #$smtp = New-Object Net.Mail.SmtpClient($SmtpServer, 25)
+            #$vlb = vlb.example.com
+            #$vlbport = 8443
+            #$maintenance_rs = 1.2.3.4
 
     # Get Account for Kemp API Authentication
 
@@ -89,14 +64,12 @@
             $vaultresource="kemp-query" # Be sure to store hypervisor readonly credentials in password vault with this resource name
             $vault = New-Object Windows.Security.Credentials.PasswordVault
             $username = ( $vault.RetrieveAll() | Where-Object { $_.Resource -eq $vaultresource } | Select-Object -First 1 ).UserName
-            $user = ($username.split("@"))[0]
-            $domain = ($username.split("@"))[1]
             $password = ( $vault.Retrieve( $vaultresource, $username ) | Select-Object -First 1 ).Password
             $securepass = ConvertTo-SecureString -String $password -AsPlainText -Force
                 
         # Set Secure Credentials Variable
             
-            $credential = New-Object System.Management.Automation.PSCredential ($username, $securepass)
+            $credentials = New-Object System.Management.Automation.PSCredential ($username, $securepass)
         
         # Clean Up
 
@@ -122,9 +95,13 @@
 
     # N/A
 
-#-----------------------------------------------------[Gather Real Server DAtaConnect to Hypervisors]-----------------------------------------------------
+#--------------------------------------------------[Set PowerShell Window Title]---------------------------------------------------
 
-    Initialize-LmConnectionParameters -Address $vlb -LBPort $vlbport -Credential $creds -Verbose
+    $host.ui.RawUI.WindowTitle = $maintenance_rs
+
+#----------------------------------------------------[Gather Real Server Data]-----------------------------------------------------
+
+    Initialize-LmConnectionParameters -Address $vlb -LBPort $vlbport -Credential $credentials -Verbose
     $getvs = Get-AdcVirtualService
     $realservers = @()
     foreach ($vs in $getvs.data.vs) {
@@ -148,10 +125,24 @@
 
     $rsbefore = $realservers | where-object {$_.rsaddr -eq $maintenance_rs}
     $realservermaint = $realservers | where-object {$_.rsaddr -eq $maintenance_rs -and $_.rsstatus -ne "Disabled"}
-    foreach ($rsmaint in realservermaint) {
+    
+#------------------------------------------------------[Disable Real Server]-------------------------------------------------------
+    
+    foreach ($rsmaint in $realservermaint) {
         $setrs = Set-AdcRealServer -rsindex $rsmaint.rsindex -enable $False -vsindex $rsmaint.vsindex
         $setrs | Format-List
     }
+
+#-----------------------------------------------------[Pause for Maintenance]------------------------------------------------------
+
+
+
+#-----------------------------------------------------[Re-enable Real Server]------------------------------------------------------
+    
+foreach ($rsmaint in $realservermaint) {
+    $setrs = Set-AdcRealServer -rsindex $rsmaint.rsindex -enable $True -vsindex $rsmaint.vsindex
+    $setrs | Format-List
+}
 
 #----------------------------------------------------------[Logging Stop]----------------------------------------------------------
 
